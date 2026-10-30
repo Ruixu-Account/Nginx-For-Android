@@ -9,7 +9,7 @@ on:
         default: "1.30.6"
 
 env:
-  NDK_VERSION: "27.3.13750724" # NDK r27c 的版本号
+  NDK_VERSION: "27.3.13750724"
   ANDROID_API: "24"
   PCRE2_VERSION: "10.44"
   OPENSSL_VERSION: "3.5.0"
@@ -42,11 +42,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake curl file binutils perl wget
 
-      # 使用 sdkmanager 安装 NDK，完美解决软链接问题
       - name: Pre-install NDK via SDK Manager
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}" || true
           echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+          # 注意：这里把 NDK 的 bin 加进 PATH，让 OpenSSL 的 Configure 脚本自己能找到
           echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Export toolchain env
@@ -57,9 +57,9 @@ jobs:
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            # 重新启用 NDK 原生的 wrapper 脚本（因为 sdkmanager 解压是完整的）
-            echo "CC=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang"
-            echo "CXX=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang++"
+            # 关键改动：直接使用底层的 clang，不用 wrapper！
+            echo "CC=$TOOLCHAIN/bin/clang"
+            echo "CXX=$TOOLCHAIN/bin/clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
             echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib"
             echo "STRIP=$TOOLCHAIN/bin/llvm-strip"
@@ -133,6 +133,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
+          # 关键改动：--with-cc 使用原生 clang，--with-cc-opt 加上 --target
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -141,9 +142,9 @@ jobs:
             --lock-path=run/nginx.lock \
             --error-log-path=logs/error.log \
             --http-log-path=logs/access.log \
-            --with-cc="$CC" \
-            --with-cc-opt="-O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
+            --with-cc="$TOOLCHAIN/bin/clang" \
+            --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
+            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
