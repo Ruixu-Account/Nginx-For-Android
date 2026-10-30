@@ -46,7 +46,6 @@ jobs:
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}" || true
           echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
-          # 注意：这里把 NDK 的 bin 加进 PATH，让 OpenSSL 的 Configure 脚本自己能找到
           echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Export toolchain env
@@ -57,7 +56,6 @@ jobs:
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            # 关键改动：直接使用底层的 clang，不用 wrapper！
             echo "CC=$TOOLCHAIN/bin/clang"
             echo "CXX=$TOOLCHAIN/bin/clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
@@ -114,6 +112,7 @@ jobs:
           fallback = (
               'if [ -z "$ngx_size" ]; then\n'
               '    case "$ngx_type" in\n'
+              '        short) ngx_size=2 ;;\n'
               '        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n'
               '        *)                                 ngx_size=8 ;;\n'
               '    esac\n'
@@ -133,7 +132,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 关键改动：--with-cc 使用原生 clang，--with-cc-opt 加上 --target
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -143,8 +141,8 @@ jobs:
             --error-log-path=logs/error.log \
             --http-log-path=logs/access.log \
             --with-cc="$TOOLCHAIN/bin/clang" \
-            --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
+            --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
+            --with-ld-opt="--target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT -fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl -llog" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
