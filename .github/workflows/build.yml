@@ -116,20 +116,18 @@ jobs:
           tar xf openssl.tar.gz
           ls -d nginx-* openssl-*
 
-      # 改用纯 Bash / sed 打补丁，彻底告别 YAML 多行缩进地狱
       - name: Patch auto scripts for cross-compile
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
           
-          # 补丁 1：跳过可运行性测试
+          # 补丁 1：跳过 auto/feature 里的运行测试
           sed -i 's/if \[ $? -eq 0 \]; then/if true; then/g' auto/feature
           sed -i 's/if \$NGX_AUTOTEST 2>&1 >\/dev\/null; then/if true; then/g' auto/feature
           echo "auto/feature patched"
 
-          # 补丁 2：处理 sizeof 运行失败的情况
+          # 补丁 2：跳过 sizeof 探测运行
           sed -i 's/ngx_size=`\$NGX_AUTOTEST`/ngx_size=`\$NGX_AUTOTEST 2>\/dev\/null || true`/g' auto/types/sizeof
-          # 强行插入 fallback 代码
           sed -i '/case \$ngx_size in/i\
           if [ -z "$ngx_size" ]; then\
               case "$ngx_type" in\
@@ -140,9 +138,21 @@ jobs:
           fi' auto/types/sizeof
           echo "auto/types/sizeof patched"
 
-          # 补丁 3：干掉 auto/cc/conf 里恶心的 --with-ld-opt 格式强校验 (匹配行及后续3行直接删除)
-          sed -i '/if \[ "\$NGX_LD_OPT" = "\${NGX_LD_OPT#-}" \]; then/,+3d' auto/cc/conf
-          echo "auto/cc/conf patched"
+          # 补丁 3：用 Python 直接把 auto/cc/conf 里的 --with-ld-opt 报错块给扬了
+          python3 - <<'PY'
+          import re, pathlib
+          p = pathlib.Path('auto/cc/conf')
+          s = p.read_text()
+          
+          pattern = r'if \[ \$ngx_found = no \]; then\s*echo \$0: error: the invalid value in --with-ld-opt=.*?exit 1\s*fi'
+          
+          s2, n = re.subn(pattern, '# patched: removed invalid value check', s, flags=re.DOTALL)
+          if n > 0:
+              p.write_text(s2)
+              print('auto/cc/conf patched: invalid value check removed')
+          else:
+              print('WARNING: auto/cc/conf pattern not found!')
+          PY
 
       - name: Configure nginx
         run: |
