@@ -9,7 +9,7 @@ on:
         default: "1.30.6"
 
 env:
-  NDK_VERSION: r27c
+  NDK_VERSION: "27.3.13750724" # NDK r27c 的版本号
   ANDROID_API: "24"
   PCRE2_VERSION: "10.44"
   OPENSSL_VERSION: "3.5.0"
@@ -25,7 +25,7 @@ jobs:
         include:
           - abi: arm64-v8a
             triple: aarch64-linux-android
-            openssl_target: android64-aarch64
+            openssl_target: android-arm64
           - abi: x86_64
             triple: x86_64-linux-android
             openssl_target: android-x86_64
@@ -40,35 +40,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake unzip curl file binutils perl
+            build-essential cmake curl file binutils perl wget
 
-      - name: Cache NDK
-        id: ndk
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/android-ndk-${{ env.NDK_VERSION }}
-          key: ndk-${{ env.NDK_VERSION }}-linux-x64
-
-      - name: Download NDK ${{ env.NDK_VERSION }}
-        if: steps.ndk.outputs.cache-hit != 'true'
+      # 使用 sdkmanager 安装 NDK，完美解决软链接问题
+      - name: Pre-install NDK via SDK Manager
         run: |
-          set -euxo pipefail
-          cd "$RUNNER_TEMP"
-          curl -fSL -o ndk.zip \
-            "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
-          unzip -q ndk.zip
-          rm -f ndk.zip
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}" || true
+          echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       - name: Export toolchain env
         run: |
           set -euxo pipefail
-          NDK_ROOT="$RUNNER_TEMP/android-ndk-${NDK_VERSION}"
           TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
           {
-            echo "NDK_ROOT=$NDK_ROOT"
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
+            # 重新启用 NDK 原生的 wrapper 脚本（因为 sdkmanager 解压是完整的）
             echo "CC=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang"
             echo "CXX=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
@@ -154,10 +143,10 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$CC" \
             --with-cc-opt="-O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -lz" \
+            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
-            --with-openssl-opt="no-shared no-tests -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
+            --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
             --with-http_ssl_module \
             --with-http_v2_module \
@@ -195,11 +184,9 @@ jobs:
       - name: Create basic directories
         run: |
           set -euxo pipefail
-          # 不用写死复杂的 nginx.conf，只创建基本的空文件夹，用户可以在 App 里通过 SAF 自己传配置
           cd "$RUNNER_TEMP/stage/${NGINX_PREFIX}"
           mkdir -p run logs html conf
           
-          # 提供一个极简的骨架配置，防止首次启动报错找不到文件
           cat > conf/nginx.conf <<'EOF'
           worker_processes auto;
           error_log logs/error.log warn;
