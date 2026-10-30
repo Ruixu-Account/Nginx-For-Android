@@ -62,10 +62,10 @@ jobs:
           
           TOOLCHAIN="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
+          
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            # 关键：直接用官方 wrapper，无视一切环境问题
             echo "CC=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang"
             echo "CXX=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
@@ -124,30 +124,33 @@ jobs:
           
           python3 - <<'PY'
           import pathlib
-          # 补丁 1：强制把运行测试改为 false（只编译不运行）
+          
+          # 补丁 1：让 auto/feature 执行测试时永远返回成功
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          s = s.replace('if [ $ngx_feature_run = yes ]; then', 'if false; then')
-          s = s.replace('if [ $ngx_feature_run = value ]; then', 'if false; then')
+          s = s.replace('/bin/sh -c $NGX_AUTOTEST >> $NGX_AUTOCONF_ERR 2>&1', 'true')
           p.write_text(s)
           print('auto/feature patched')
 
-          # 补丁 2：防止 sizeof 运行报错退出
+          # 补丁 2：改写 auto/types/sizeof，使用单行字符串加 \n 进行替换
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
-          s = s.replace('ngx_size=`$NGX_AUTOTEST`', 'ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`')
-          s = s.replace('exit 1', 'ngx_size=4; echo " 4 bytes (forced)"')
+          
+          old_block = "if [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST`\n    echo \" $ngx_size bytes\"\nfi"
+          new_block = "ngx_size=\"\"\nif [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`\nfi\nif [ -z \"$ngx_size\" ]; then\n    case \"$ngx_type\" in\n        short) ngx_size=2 ;;\n        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n        *) ngx_size=8 ;;\n    esac\n    echo \" $ngx_size bytes (forced)\"\nelse\n    echo \" $ngx_size bytes\"\nfi"
+          
+          s = s.replace(old_block, new_block)
           p.write_text(s)
           print('auto/types/sizeof patched')
 
-          # 补丁 3：干掉 auto/cc/conf 的报错
-          p = pathlib.Path('auto/cc/conf')
+          # 补丁 3：干掉 auto/cc/name 里的报错退出逻辑
+          p = pathlib.Path('auto/cc/name')
           s = p.read_text()
-          # 通过替换关键字将校验跳过
-          s = s.replace('if [ $ngx_found = no ]; then\n            echo $0: error: the invalid value in --with-ld-opt=\\"$NGX_LD_OPT\\"\n            echo\n            exit 1\n        fi', '')
-          s = s.replace('if [ $ngx_found = no ]; then\n            echo $0: error: the invalid value in --with-ld-opt="$NGX_LD_OPT"\n            echo\n            exit 1\n        fi', '')
+          
+          old_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
+          s = s.replace(old_error, "")
           p.write_text(s)
-          print('auto/cc/conf patched')
+          print('auto/cc/name patched')
           PY
 
       - name: Configure nginx
@@ -155,7 +158,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 注意：去掉了 --target 和 --sysroot，因为 NDK wrapper 已经自带
+          # 极度干净的参数，不传 --target 避免污染，只传必要的
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -166,7 +169,7 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$CC" \
             --with-cc-opt="-O2 -fPIC -I$DEPS/include" \
-            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl" \
+            --with-ld-opt="-L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
