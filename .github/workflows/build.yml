@@ -53,11 +53,16 @@ jobs:
           set -euxo pipefail
           TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
+          
+          # 关键：把 target 和 sysroot 直接焊死在 CC/CXX 环境变量里！
+          export CC_WITH_TARGET="$TOOLCHAIN/bin/clang --target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT"
+          export CXX_WITH_TARGET="$TOOLCHAIN/bin/clang++ --target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT"
+
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            echo "CC=$TOOLCHAIN/bin/clang"
-            echo "CXX=$TOOLCHAIN/bin/clang++"
+            echo "CC=$CC_WITH_TARGET"
+            echo "CXX=$CXX_WITH_TARGET"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
             echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib"
             echo "STRIP=$TOOLCHAIN/bin/llvm-strip"
@@ -132,6 +137,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
+          # 直接使用带上了 target 和 sysroot 的 CC
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -140,9 +146,9 @@ jobs:
             --lock-path=run/nginx.lock \
             --error-log-path=logs/error.log \
             --http-log-path=logs/access.log \
-            --with-cc="$TOOLCHAIN/bin/clang" \
-            --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="--target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT -fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl -llog" \
+            --with-cc="$CC" \
+            --with-cc-opt="-O2 -fPIC -I$DEPS/include" \
+            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
