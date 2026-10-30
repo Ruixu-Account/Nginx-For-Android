@@ -53,16 +53,15 @@ jobs:
           set -euxo pipefail
           TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
+          TARGET="${{ matrix.triple }}${ANDROID_API}"
           
-          # 终极杀招：生成无空格的假编译器脚本
-          cat > "$RUNNER_TEMP/android-clang" <<EOF
-#!/bin/sh
-exec "$TOOLCHAIN/bin/clang" --target=${{ matrix.triple }}${ANDROID_API} --sysroot="$SYSROOT" "\$@"
-EOF
-          cat > "$RUNNER_TEMP/android-clang++" <<EOF
-#!/bin/sh
-exec "$TOOLCHAIN/bin/clang++" --target=${{ matrix.triple }}${ANDROID_API} --sysroot="$SYSROOT" "\$@"
-EOF
+          # 使用 printf 生成脚本，完美避开 YAML 缩进和 shebang 首行空格的问题
+          printf '#!/bin/sh\nexec "%s" --target=%s --sysroot="%s" "$@"\n' \
+            "$TOOLCHAIN/bin/clang" "$TARGET" "$SYSROOT" > "$RUNNER_TEMP/android-clang"
+            
+          printf '#!/bin/sh\nexec "%s" --target=%s --sysroot="%s" "$@"\n' \
+            "$TOOLCHAIN/bin/clang++" "$TARGET" "$SYSROOT" > "$RUNNER_TEMP/android-clang++"
+
           chmod +x "$RUNNER_TEMP/android-clang" "$RUNNER_TEMP/android-clang++"
 
           {
@@ -144,7 +143,6 @@ EOF
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 直接用无空格的假编译器，参数极其干净
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
