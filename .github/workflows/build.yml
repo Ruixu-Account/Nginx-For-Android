@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     name: nginx-${{ matrix.abi }}
-    runs-on: ubuntu-latest # 换成了 latest，防排队
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -26,9 +26,9 @@ jobs:
           - abi: arm64-v8a
             triple: aarch64-linux-android
             openssl_target: android-arm64
-          - abi: x86_64
-            triple: x86_64-linux-android
-            openssl_target: android-x86_64
+          # - abi: x86_64
+          #   triple: x86_64-linux-android
+          #   openssl_target: android-x86_64
 
     env:
       NGINX_VERSION: ${{ inputs.nginx_version || '1.30.6' }}
@@ -42,16 +42,25 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake curl file binutils perl wget
 
+      - name: Cache NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: $ANDROID_HOME/ndk/${NDK_VERSION}
+          key: ndk-${NDK_VERSION}
+
       - name: Pre-install NDK via SDK Manager
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}" || true
-          echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
-
+          
       - name: Export toolchain env
         run: |
           set -euxo pipefail
-          TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          
+          TOOLCHAIN="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
@@ -66,7 +75,15 @@ jobs:
           } >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/deps-${{ matrix.abi }}" "$RUNNER_TEMP/src"
 
+      - name: Cache PCRE2
+        id: cache-pcre2
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/deps-${{ matrix.abi }}
+          key: pcre2-${PCRE2_VERSION}-${{ matrix.abi }}
+
       - name: Build PCRE2 (static)
+        if: steps.cache-pcre2.outputs.cache-hit != 'true'
         run: |
           set -euxo pipefail
           cd "$SRC"
@@ -131,7 +148,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 原封不动保留你成功过 configure 的参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -142,8 +158,7 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$TOOLCHAIN/bin/clang" \
             --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
-            --with-pcre="$DEPS" \
+            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lpthread -lm -ldl" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
@@ -172,7 +187,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
           
-          # 拦截 make 的退出状态，并将日志保存到文件
           set +e
           make -j"$(nproc)" 2>&1 | tee /tmp/make.log
           MAKE_EXIT=${PIPESTATUS[0]}
@@ -182,13 +196,11 @@ jobs:
             echo "=================================================="
             echo "=== MAKE FAILED! FILTERING RELEVANT ERRORS ==="
             echo "=================================================="
-            # 提取所有常见的报错关键字
             grep -iE "error|undefined reference|cannot find|ld:|clang:|fatal|collect2" /tmp/make.log | tail -n 100 || true
             echo "=================================================="
             exit 1
           fi
           
-          # 安装部分
           set +e
           make install DESTDIR="$RUNNER_TEMP/stage" 2>&1 | tee /tmp/install.log
           INSTALL_EXIT=${PIPESTATUS[0]}
