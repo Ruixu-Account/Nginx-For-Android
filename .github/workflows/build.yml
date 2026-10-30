@@ -48,21 +48,28 @@ jobs:
           echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
           echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: Export toolchain env
+      - name: Export toolchain env and build wrappers
         run: |
           set -euxo pipefail
           TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
           
-          # 关键：把 target 和 sysroot 直接焊死在 CC/CXX 环境变量里！
-          export CC_WITH_TARGET="$TOOLCHAIN/bin/clang --target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT"
-          export CXX_WITH_TARGET="$TOOLCHAIN/bin/clang++ --target=${{ matrix.triple }}${ANDROID_API} --sysroot=$SYSROOT"
+          # 终极杀招：生成无空格的假编译器脚本
+          cat > "$RUNNER_TEMP/android-clang" <<EOF
+#!/bin/sh
+exec "$TOOLCHAIN/bin/clang" --target=${{ matrix.triple }}${ANDROID_API} --sysroot="$SYSROOT" "\$@"
+EOF
+          cat > "$RUNNER_TEMP/android-clang++" <<EOF
+#!/bin/sh
+exec "$TOOLCHAIN/bin/clang++" --target=${{ matrix.triple }}${ANDROID_API} --sysroot="$SYSROOT" "\$@"
+EOF
+          chmod +x "$RUNNER_TEMP/android-clang" "$RUNNER_TEMP/android-clang++"
 
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            echo "CC=$CC_WITH_TARGET"
-            echo "CXX=$CXX_WITH_TARGET"
+            echo "CC=$RUNNER_TEMP/android-clang"
+            echo "CXX=$RUNNER_TEMP/android-clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
             echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib"
             echo "STRIP=$TOOLCHAIN/bin/llvm-strip"
@@ -137,7 +144,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 直接使用带上了 target 和 sysroot 的 CC
+          # 直接用无空格的假编译器，参数极其干净
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
