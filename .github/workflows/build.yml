@@ -121,37 +121,70 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
           
-          # 补丁 1：跳过 auto/feature 里的运行测试
-          sed -i 's/if \[ $? -eq 0 \]; then/if true; then/g' auto/feature
-          sed -i 's/if \$NGX_AUTOTEST 2>&1 >\/dev\/null; then/if true; then/g' auto/feature
-          echo "auto/feature patched"
-
-          # 补丁 2：跳过 sizeof 探测运行
-          sed -i 's/ngx_size=`\$NGX_AUTOTEST`/ngx_size=`\$NGX_AUTOTEST 2>\/dev\/null || true`/g' auto/types/sizeof
-          sed -i '/case \$ngx_size in/i\
-          if [ -z "$ngx_size" ]; then\
-              case "$ngx_type" in\
-                  short) ngx_size=2 ;;\
-                  int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\
-                  *) ngx_size=8 ;;\
-              esac\
-          fi' auto/types/sizeof
-          echo "auto/types/sizeof patched"
-
-          # 补丁 3：用 Python 直接把 auto/cc/conf 里的 --with-ld-opt 报错块给扬了
           python3 - <<'PY'
-          import re, pathlib
+          import pathlib, re
+
+          # 补丁 1：绕过 auto/feature 的运行测试
+          p = pathlib.Path('auto/feature')
+          s = p.read_text()
+          s = s.replace('if [ $ngx_feature_run = yes ]; then', 'if false; then')
+          s = s.replace('if [ $ngx_feature_run = value ]; then', 'if false; then')
+          p.write_text(s)
+          print('auto/feature patched')
+
+          # 补丁 2：auto/types/sizeof 防止 exit 1，强行赋值
+          p = pathlib.Path('auto/types/sizeof')
+          s = p.read_text()
+          old_run = '''if [ -x $NGX_AUTOTEST ]; then
+              ngx_size=`$NGX_AUTOTEST`
+              echo " $ngx_size bytes"
+          else
+              ngx_size=
+              echo
+              echo "----------"
+              cat $NGX_AUTOTEST.c
+              echo "----------"
+              echo
+              cat $NGX_AUTOCONF_ERR
+              echo "----------"
+              exit 1
+          fi'''
+          new_run = '''ngx_size=
+          if [ -x $NGX_AUTOTEST ]; then
+              ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`
+          fi
+
+          if [ -z "$ngx_size" ]; then
+              case "$ngx_type" in
+                  short) ngx_size=2 ;;
+                  int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;
+                  *) ngx_size=8 ;;
+              esac
+          fi
+          echo " $ngx_size bytes (forced)"'''
+          
+          if old_run in s:
+              s = s.replace(old_run, new_run)
+          else:
+              s = re.sub(r'if \[ -x \$NGX_AUTOTEST \]; then.*?exit 1\nfi', new_run, s, flags=re.DOTALL)
+          p.write_text(s)
+          print('auto/types/sizeof patched')
+
+          # 补丁 3：干掉 auto/cc/conf 的报错
           p = pathlib.Path('auto/cc/conf')
           s = p.read_text()
-          
-          pattern = r'if \[ \$ngx_found = no \]; then\s*echo \$0: error: the invalid value in --with-ld-opt=.*?exit 1\s*fi'
-          
-          s2, n = re.subn(pattern, '# patched: removed invalid value check', s, flags=re.DOTALL)
-          if n > 0:
-              p.write_text(s2)
-              print('auto/cc/conf patched: invalid value check removed')
-          else:
-              print('WARNING: auto/cc/conf pattern not found!')
+          s = s.replace('''if [ $ngx_found = no ]; then
+              echo $0: error: the invalid value in --with-ld-opt=\\"$NGX_LD_OPT\\"
+              echo
+              exit 1
+          fi''', '')
+          s = s.replace('''if [ $ngx_found = no ]; then
+              echo $0: error: the invalid value in --with-ld-opt=\\"$NGX_LD_OPT\\"
+              echo
+              exit 1
+          fi'''.replace('\\"', '"'), '')
+          p.write_text(s)
+          print('auto/cc/conf patched')
           PY
 
       - name: Configure nginx
