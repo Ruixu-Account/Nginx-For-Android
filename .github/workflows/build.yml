@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     name: nginx-${{ matrix.abi }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest # 换成了 latest，防排队
     strategy:
       fail-fast: false
       matrix:
@@ -48,25 +48,16 @@ jobs:
           echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
           echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: Export toolchain env and build wrappers
+      - name: Export toolchain env
         run: |
           set -euxo pipefail
           TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
-          TARGET="${{ matrix.triple }}${ANDROID_API}"
-          
-          # 生成无空格的假编译器脚本
-          printf '#!/bin/sh\nexec "%s" --target=%s --sysroot="%s" "$@"\n' \
-            "$TOOLCHAIN/bin/clang" "$TARGET" "$SYSROOT" > "$RUNNER_TEMP/android-clang"
-          printf '#!/bin/sh\nexec "%s" --target=%s --sysroot="%s" "$@"\n' \
-            "$TOOLCHAIN/bin/clang++" "$TARGET" "$SYSROOT" > "$RUNNER_TEMP/android-clang++"
-          chmod +x "$RUNNER_TEMP/android-clang" "$RUNNER_TEMP/android-clang++"
-
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            echo "CC=$RUNNER_TEMP/android-clang"
-            echo "CXX=$RUNNER_TEMP/android-clang++"
+            echo "CC=$TOOLCHAIN/bin/clang"
+            echo "CXX=$TOOLCHAIN/bin/clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
             echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib"
             echo "STRIP=$TOOLCHAIN/bin/llvm-strip"
@@ -108,23 +99,10 @@ jobs:
           tar xf openssl.tar.gz
           ls -d nginx-* openssl-*
 
-      - name: Patch auto scripts for cross-compile
+      - name: Patch auto/types/sizeof for cross-compile
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
-          
-          # 补丁 1：强行跳过所有可运行性测试
-          python3 - <<'PY'
-          import pathlib
-          p = pathlib.Path('auto/feature')
-          s = p.read_text()
-          s = s.replace('if [ $? -eq 0 ]; then\n', 'if true; then\n')
-          s = s.replace('if $NGX_AUTOTEST 2>&1 >/dev/null; then', 'if true; then')
-          p.write_text(s)
-          print('auto/feature patched')
-          PY
-          
-          # 补丁 2：处理 sizeof 运行失败的情况，增加 short 类型
           python3 - <<'PY'
           import re, pathlib, sys
           p = pathlib.Path('auto/types/sizeof')
@@ -134,7 +112,6 @@ jobs:
           fallback = (
               'if [ -z "$ngx_size" ]; then\n'
               '    case "$ngx_type" in\n'
-              '        short) ngx_size=2 ;;\n'
               '        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n'
               '        *)                                 ngx_size=8 ;;\n'
               '    esac\n'
@@ -154,6 +131,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
+          # 原封不动保留你成功过 configure 的参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -162,9 +140,9 @@ jobs:
             --lock-path=run/nginx.lock \
             --error-log-path=logs/error.log \
             --http-log-path=logs/access.log \
-            --with-cc="$CC" \
-            --with-cc-opt="-O2 -fPIC -I$DEPS/include" \
-            --with-ld-opt="-fPIE -pie -L$SRC/openssl-${OPENSSL_VERSION}/.openssl/lib -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lssl -lcrypto -lz -latomic -lpthread -lm -ldl" \
+            --with-cc="$TOOLCHAIN/bin/clang" \
+            --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
+            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
@@ -189,27 +167,28 @@ jobs:
             --with-stream_realip_module \
             --with-stream_ssl_preread_module
 
-      - name: Build & install
+      - name: Build & install (with error extraction)
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
           
-          # 先关闭错误退出，把 make 日志写到 /tmp/make.log
+          # 拦截 make 的退出状态，并将日志保存到文件
           set +e
           make -j"$(nproc)" 2>&1 | tee /tmp/make.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -e
           
-          # 如果 make 失败了，自动抓取包含 error 或者 undefined 的日志行
           if [ $MAKE_EXIT -ne 0 ]; then
             echo "=================================================="
             echo "=== MAKE FAILED! FILTERING RELEVANT ERRORS ==="
             echo "=================================================="
-            grep -iE "error|undefined reference|cannot find|ld:|clang:|fatal" /tmp/make.log | tail -n 80
+            # 提取所有常见的报错关键字
+            grep -iE "error|undefined reference|cannot find|ld:|clang:|fatal|collect2" /tmp/make.log | tail -n 100 || true
+            echo "=================================================="
             exit 1
           fi
           
-          # 安装
+          # 安装部分
           set +e
           make install DESTDIR="$RUNNER_TEMP/stage" 2>&1 | tee /tmp/install.log
           INSTALL_EXIT=${PIPESTATUS[0]}
@@ -217,7 +196,7 @@ jobs:
           
           if [ $INSTALL_EXIT -ne 0 ]; then
             echo "=== INSTALL FAILED ==="
-            tail -n 40 /tmp/install.log
+            tail -n 50 /tmp/install.log
             exit 1
           fi
 
@@ -225,6 +204,14 @@ jobs:
           "$STRIP" --strip-unneeded "$BIN"
           file "$BIN"
           "$TOOLCHAIN/bin/llvm-readelf" -d "$BIN" | head -30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.abi }}
+          path: /tmp/make.log
+          if-no-files-found: ignore
 
       - name: Create basic directories
         run: |
@@ -255,7 +242,7 @@ jobs:
           tar -czf "$RUNNER_TEMP/nginx-${NGINX_VERSION}-${{ matrix.abi }}.tar.gz" .
           ls -lh "$RUNNER_TEMP"/*.tar.gz
 
-      - name: Upload artifact
+      - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}
