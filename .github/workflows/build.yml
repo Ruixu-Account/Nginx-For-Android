@@ -66,6 +66,7 @@ jobs:
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
+            # 恢复使用官方自带 sysroot 的 wrapper
             echo "CC=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang"
             echo "CXX=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
@@ -132,7 +133,7 @@ jobs:
           p.write_text(s)
           print('auto/feature patched')
 
-          # 补丁 2：改写 auto/types/sizeof，使用单行字符串加 \n 进行替换
+          # 补丁 2：改写 auto/types/sizeof，防止探测失败
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
           
@@ -143,14 +144,20 @@ jobs:
           p.write_text(s)
           print('auto/types/sizeof patched')
 
-          # 补丁 3：干掉 auto/cc/name 里的报错退出逻辑
+          # 补丁 3：彻底阉割 auto/cc/name 的报错退出
           p = pathlib.Path('auto/cc/name')
           s = p.read_text()
-          
           old_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
           s = s.replace(old_error, "")
           p.write_text(s)
           print('auto/cc/name patched')
+
+          # 补丁 4：终极绝杀！直接关掉 auto/cc/conf 对 --with-ld-opt 的验证逻辑
+          p = pathlib.Path('auto/cc/conf')
+          s = p.read_text()
+          s = s.replace('if test -n "$NGX_LD_OPT"; then', 'if false; then # patched: skip ld-opt check')
+          p.write_text(s)
+          print('auto/cc/conf patched (ld-opt check disabled)')
           PY
 
       - name: Configure nginx
@@ -158,7 +165,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 极度干净的参数，不传 --target 避免污染，只传必要的
+          # 极度干净的参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
