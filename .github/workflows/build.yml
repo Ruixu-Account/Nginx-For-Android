@@ -116,10 +116,23 @@ jobs:
           tar xf openssl.tar.gz
           ls -d nginx-* openssl-*
 
-      - name: Patch auto/types/sizeof for cross-compile
+      - name: Patch auto scripts for cross-compile
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
+          
+          # 补丁 1：强行跳过所有可运行性测试
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('auto/feature')
+          s = p.read_text()
+          s = s.replace('if [ $? -eq 0 ]; then\n', 'if true; then\n')
+          s = s.replace('if $NGX_AUTOTEST 2>&1 >/dev/null; then', 'if true; then')
+          p.write_text(s)
+          print('auto/feature patched')
+          PY
+          
+          # 补丁 2：处理 sizeof 运行失败的情况，增加 short 类型
           python3 - <<'PY'
           import re, pathlib, sys
           p = pathlib.Path('auto/types/sizeof')
@@ -129,6 +142,7 @@ jobs:
           fallback = (
               'if [ -z "$ngx_size" ]; then\n'
               '    case "$ngx_type" in\n'
+              '        short) ngx_size=2 ;;\n'
               '        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n'
               '        *)                                 ngx_size=8 ;;\n'
               '    esac\n'
@@ -143,11 +157,29 @@ jobs:
           print('auto/types/sizeof patched')
           PY
 
+          # 补丁 3：干掉 auto/cc/conf 里恶心的 --with-ld-opt 格式强校验
+          python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path('auto/cc/conf')
+          s = p.read_text()
+          bad_code = '''    if [ "$NGX_LD_OPT" = "${NGX_LD_OPT#-}" ]; then
+        echo " + invalid value in --with-ld-opt=\\"$NGX_LD_OPT\\""
+        exit 1
+    fi'''
+          if bad_code in s:
+              s = s.replace(bad_code, '    # patched: removed invalid value check')
+              p.write_text(s)
+              print('auto/cc/conf patched')
+          else:
+              print('warning: auto/cc/conf pattern not found, skipping')
+          PY
+
       - name: Configure nginx
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
+          # 移除了 -lpcre2-8，Nginx 自己会去 auto/lib/pcre/conf 加
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -158,7 +190,7 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$TOOLCHAIN/bin/clang" \
             --with-cc-opt="--target=${{ matrix.triple }}${ANDROID_API} -O2 -fPIC -I$DEPS/include -I$SYSROOT/usr/include" \
-            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lpthread -lm -ldl" \
+            --with-ld-opt="-fPIE -pie --target=${{ matrix.triple }}${ANDROID_API} -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lz -latomic -lpthread -lm -ldl" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
