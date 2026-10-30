@@ -4,18 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       nginx_version:
-        description: "nginx version (e.g. 1.28.0)"
+        description: "nginx version (e.g. 1.30.6)"
         required: true
-        default: "1.28.0"
-  push:
-    branches: [ main ]
+        default: "1.30.6"
 
 env:
   NDK_VERSION: r27c
   ANDROID_API: "24"
   PCRE2_VERSION: "10.44"
   OPENSSL_VERSION: "3.5.0"
-  NGINX_PREFIX: "/data/data/com.nginx.app/nginx" # 定义工作目录
+  NGINX_PREFIX: "/data/data/com.nginx.app/nginx"
 
 jobs:
   build:
@@ -33,7 +31,7 @@ jobs:
             openssl_target: android-x86_64
 
     env:
-      NGINX_VERSION: ${{ inputs.nginx_version || '1.28.0' }}
+      NGINX_VERSION: ${{ inputs.nginx_version || '1.30.6' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -159,17 +157,27 @@ jobs:
             --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -lz" \
             --with-pcre="$DEPS" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
-            --with-openssl-opt="no-shared no-tests no-comp -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
+            --with-openssl-opt="no-shared no-tests -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
+            --with-threads \
             --with-http_ssl_module \
             --with-http_v2_module \
+            --with-http_v3_module \
             --with-http_realip_module \
+            --with-http_addition_module \
+            --with-http_sub_module \
+            --with-http_dav_module \
+            --with-http_flv_module \
+            --with-http_mp4_module \
+            --with-http_gunzip_module \
             --with-http_gzip_static_module \
+            --with-http_auth_request_module \
+            --with-http_secure_link_module \
+            --with-http_slice_module \
             --with-http_stub_status_module \
-            --with-threads \
-            --without-mail_pop3_module \
-            --without-mail_imap_module \
-            --without-mail_smtp_module \
-            --without-stream
+            --with-stream \
+            --with-stream_ssl_module \
+            --with-stream_realip_module \
+            --with-stream_ssl_preread_module
 
       - name: Build & install
         run: |
@@ -177,7 +185,6 @@ jobs:
           cd "$SRC/nginx-${NGINX_VERSION}"
           make -j"$(nproc)"
           
-          # 安装到 staging 的绝对路径下
           make install DESTDIR="$RUNNER_TEMP/stage"
 
           BIN="$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
@@ -185,33 +192,26 @@ jobs:
           file "$BIN"
           "$TOOLCHAIN/bin/llvm-readelf" -d "$BIN" | head -30
 
-      - name: Generate sample nginx.conf
+      - name: Create basic directories
         run: |
           set -euxo pipefail
-          CONF="$RUNNER_TEMP/stage/${NGINX_PREFIX}/conf/nginx.conf"
-          cat > "$CONF" <<'EOF'
-          # 注意：在 App 中运行时，无需传 -p 参数，默认会使用编译时的 prefix
-          worker_processes  auto;
-          error_log  logs/error.log warn;
-          pid        run/nginx.pid;
-
-          events {
-              worker_connections  1024;
-          }
-
+          # 不用写死复杂的 nginx.conf，只创建基本的空文件夹，用户可以在 App 里通过 SAF 自己传配置
+          cd "$RUNNER_TEMP/stage/${NGINX_PREFIX}"
+          mkdir -p run logs html conf
+          
+          # 提供一个极简的骨架配置，防止首次启动报错找不到文件
+          cat > conf/nginx.conf <<'EOF'
+          worker_processes auto;
+          error_log logs/error.log warn;
+          pid run/nginx.pid;
+          events { worker_connections 1024; }
           http {
-              include       mime.types;
-              default_type  application/octet-stream;
-              sendfile        off;   # Android 上必须关
-
+              include mime.types;
+              default_type application/octet-stream;
+              sendfile off;
               server {
-                  listen       8080;
-                  server_name  localhost;
-
-                  location / {
-                      root   html;
-                      index  index.html;
-                  }
+                  listen 8080;
+                  location / { root html; index index.html; }
               }
           }
           EOF
@@ -219,12 +219,7 @@ jobs:
       - name: Pack artifact
         run: |
           set -euxo pipefail
-          # 直接进到目标目录下打包，解压出来就是干净的 sbin/ conf/ 等
           cd "$RUNNER_TEMP/stage/${NGINX_PREFIX}"
-          
-          # 自动建好所需的空目录
-          mkdir -p run logs html
-          
           tar -czf "$RUNNER_TEMP/nginx-${NGINX_VERSION}-${{ matrix.abi }}.tar.gz" .
           ls -lh "$RUNNER_TEMP"/*.tar.gz
 
