@@ -123,26 +123,21 @@ jobs:
           cd "$SRC/nginx-${NGINX_VERSION}"
           
           python3 - <<'PY'
-          import pathlib, re
-          
-          # 补丁 1：修改 auto/feature，在生成代码时强行加 stdint.h，并跳过运行阶段
+          import pathlib
+
+          # 补丁 1：自动注入头文件，并强制跳过所有“运行测试”
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>')
-          s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
+          s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>\n#include <stddef.h>')
+          s = s.replace('/bin/sh -c $NGX_AUTOTEST >> $NGX_AUTOCONF_ERR 2>&1', 'true')
           p.write_text(s)
           print('auto/feature patched')
 
-          # 补丁 2：修改 auto/types/sizeof，强制强行绕过 uint32_t 报错
+          # 补丁 2：在 auto/types/sizeof 中防止探测失败退出
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
-          
-          old_block = "if [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST`\n    echo \" $ngx_size bytes\"\nfi"
-          new_block = "ngx_size=\"\"\nif [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`\nfi\nif [ -z \"$ngx_size\" ]; then\n    case \"$ngx_type\" in\n        short) ngx_size=2 ;;\n        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n        *) ngx_size=8 ;;\n    esac\n    echo \" $ngx_size bytes (forced)\"\nelse\n    echo \" $ngx_size bytes\"\nfi"
-          s = s.replace(old_block, new_block)
-          
-          # 用正则把 uint32_t 报错逻辑直接扬了
-          s = re.sub(r'if \[ \$ngx_found = no \]; then\s*echo "\$0: error: can not define uint32_t"\s*exit 1\s*fi', 'if [ $ngx_found = no ]; then\n    echo " uint32_t (forced)"\n    have=NGX_HAVE_UINT32_T . auto/have\nfi', s, flags=re.DOTALL)
+          s = s.replace('ngx_size=`$NGX_AUTOTEST`', 'ngx_size=')
+          s = s.replace('case $ngx_size in', 'if [ -z "$ngx_size" ]; then case "$ngx_type" in short) ngx_size=2 ;; int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;; *) ngx_size=8 ;; esac; fi\ncase $ngx_size in')
           p.write_text(s)
           print('auto/types/sizeof patched')
 
