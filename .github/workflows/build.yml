@@ -8,6 +8,10 @@ on:
         required: true
         default: "1.30.6"
 
+# 必须赋予写入权限，才能创建 Release 和 Tag
+permissions:
+  contents: write
+
 env:
   NDK_VERSION: "27.3.13750724"
   ANDROID_API: "24"
@@ -201,7 +205,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 注意：移除了 -lpthread 和 -ldl，因为 Android Bionic 已内置
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -241,17 +244,15 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 1. 修复 ngx_auto_config.h 里的空宏
           sed -i 's/#define NGX_HAVE_EPOLLEXCLUSIVE$/#define NGX_HAVE_EPOLLEXCLUSIVE 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_EPOLLRDHUP$/#define NGX_HAVE_EPOLLRDHUP 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_EVENTFD$/#define NGX_HAVE_EVENTFD 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_FILE_AIO$/#define NGX_HAVE_FILE_AIO 1/g' objs/ngx_auto_config.h || true
 
-          # 2. 从生成的 Makefile 中物理抹除 -lpthread 和 -ldl
           sed -i 's/-lpthread//g' objs/Makefile
           sed -i 's/-ldl//g' objs/Makefile
 
-      - name: Build & install (with error extraction)
+      - name: Build & install
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
@@ -277,14 +278,6 @@ jobs:
           "$STRIP" --strip-unneeded "$BIN"
           file "$BIN"
           "$TOOLCHAIN/bin/llvm-readelf" -d "$BIN" | head -30
-
-      - name: Upload build log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ matrix.abi }}
-          path: /tmp/make.log
-          if-no-files-found: ignore
 
       - name: Create basic directories
         run: |
@@ -321,6 +314,26 @@ jobs:
           name: nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}
           path: ${{ runner.temp }}/nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}.tar.gz
           if-no-files-found: ignore
+
+      # ====== 新增：发布到 GitHub Releases ======
+      - name: Release to GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          # 直接使用你输入的版本号作为 Tag
+          tag_name: ${{ env.NGINX_VERSION }}
+          name: Nginx ${{ env.NGINX_VERSION }} (Android ${{ matrix.abi }})
+          body: |
+            Auto-built Nginx ${{ env.NGINX_VERSION }} for Android (${{ matrix.abi }}).
+            
+            Built with:
+            - NDK r27c (API 24)
+            - OpenSSL 3.5.0
+            - PCRE2 10.44
+            
+            Fully static linked, ready for Termux or Android App sandbox.
+          files: ${{ runner.temp }}/nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}.tar.gz
+          draft: false
+          prerelease: false
 
       - name: Dump config.log on failure
         if: failure()
