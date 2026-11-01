@@ -201,6 +201,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
+          # 注意：移除了 -lpthread 和 -ldl，因为 Android Bionic 已内置
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -211,7 +212,7 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$CC" \
             --with-cc-opt="-O2 -fPIC -Wno-error=implicit-function-declaration -D_GNU_SOURCE -DEPOLLRDHUP=0x2000 -I$DEPS/include" \
-            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lpthread -lm -ldl" \
+            --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lm" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
@@ -240,11 +241,15 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 修复 ngx_auto_config.h 里的空宏
+          # 1. 修复 ngx_auto_config.h 里的空宏
           sed -i 's/#define NGX_HAVE_EPOLLEXCLUSIVE$/#define NGX_HAVE_EPOLLEXCLUSIVE 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_EPOLLRDHUP$/#define NGX_HAVE_EPOLLRDHUP 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_EVENTFD$/#define NGX_HAVE_EVENTFD 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_FILE_AIO$/#define NGX_HAVE_FILE_AIO 1/g' objs/ngx_auto_config.h || true
+
+          # 2. 从生成的 Makefile 中物理抹除 -lpthread 和 -ldl
+          sed -i 's/-lpthread//g' objs/Makefile
+          sed -i 's/-ldl//g' objs/Makefile
 
       - name: Build & install (with error extraction)
         run: |
