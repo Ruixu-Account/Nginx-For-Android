@@ -125,15 +125,17 @@ jobs:
           python3 - <<'PY'
           import pathlib
           
-          # 补丁 1：让 auto/feature 跳过运行阶段，但保留编译测试！
+          # 补丁 1：让 auto/feature 包含 stdint.h，并跳过运行阶段
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          # 把运行结果强制判定为 true，这意味着：只要编译通过，就认为是支持的
-          s = s.replace('/bin/sh -c $NGX_AUTOTEST >> $NGX_AUTOCONF_ERR 2>&1', 'true')
+          # 解决 uint32_t 未定义的问题
+          s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>\n#include <stddef.h>')
+          # 跳过执行测试，只要编译过了就算成功
+          s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
           p.write_text(s)
-          print('auto/feature patched (compile true, run bypassed)')
+          print('auto/feature patched (includes added & skip execution)')
 
-          # 补丁 2：改写 auto/types/sizeof
+          # 补丁 2：改写 auto/types/sizeof，防止探测失败
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
           old_block = "if [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST`\n    echo \" $ngx_size bytes\"\nfi"
@@ -150,13 +152,13 @@ jobs:
           p.write_text(s)
           print('auto/cc/name patched')
 
-          # 补丁 4：清空测试阶段链接参数，但不破坏最终的 -lz 等参数
+          # 补丁 4：清空测试阶段链接参数
           p = pathlib.Path('auto/cc/conf')
           s = p.read_text()
           s = s.replace('if test -n "$NGX_LD_OPT"; then', 'if false; then # patched: skip ld-opt check')
           s = s.replace('NGX_TEST_LD_OPT="$NGX_LD_OPT"', 'NGX_TEST_LD_OPT=""')
           p.write_text(s)
-          print('auto/cc/conf patched (test link options cleared)')
+          print('auto/cc/conf patched')
           PY
 
       - name: Configure nginx
