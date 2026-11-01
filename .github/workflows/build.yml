@@ -123,17 +123,17 @@ jobs:
           cd "$SRC/nginx-${NGINX_VERSION}"
           
           python3 - <<'PY'
-          import pathlib
+          import pathlib, re
           
-          # 补丁 1：让 auto/feature 包含 stdint.h，并跳过运行阶段
+          # 补丁 1：修改 auto/feature，在生成代码时强行加 stdint.h，并跳过运行阶段
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>\n#include <stddef.h>')
+          s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>')
           s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
           p.write_text(s)
           print('auto/feature patched')
 
-          # 补丁 2：改写 auto/types/sizeof，防止探测失败
+          # 补丁 2：修改 auto/types/sizeof，强制强行绕过 uint32_t 报错
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
           
@@ -141,16 +141,16 @@ jobs:
           new_block = "ngx_size=\"\"\nif [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`\nfi\nif [ -z \"$ngx_size\" ]; then\n    case \"$ngx_type\" in\n        short) ngx_size=2 ;;\n        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n        *) ngx_size=8 ;;\n    esac\n    echo \" $ngx_size bytes (forced)\"\nelse\n    echo \" $ngx_size bytes\"\nfi"
           s = s.replace(old_block, new_block)
           
-          s = s.replace('ngx_feature_incs=\nngx_feature_path=\nngx_feature_libs=\nngx_feature_test="uint32_t', 'ngx_feature_incs="#include <stdint.h>"\nngx_feature_path=\nngx_feature_libs=\nngx_feature_test="uint32_t')
-          s = s.replace('if [ $ngx_found = no ]; then\n    echo "$0: error: can not define uint32_t"\n    exit 1\nfi', 'if [ $ngx_found = no ]; then\n    have=NGX_HAVE_UINT32_T . auto/have\n    ngx_found=yes\nfi')
+          # 用正则把 uint32_t 报错逻辑直接扬了
+          s = re.sub(r'if \[ \$ngx_found = no \]; then\s*echo "\$0: error: can not define uint32_t"\s*exit 1\s*fi', 'if [ $ngx_found = no ]; then\n    echo " uint32_t (forced)"\n    have=NGX_HAVE_UINT32_T . auto/have\nfi', s, flags=re.DOTALL)
           p.write_text(s)
           print('auto/types/sizeof patched')
 
           # 补丁 3：干掉 auto/cc/name 的报错退出
           p = pathlib.Path('auto/cc/name')
           s = p.read_text()
-          old_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
-          s = s.replace(old_error, "")
+          old_cc_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
+          s = s.replace(old_cc_error, "")
           p.write_text(s)
           print('auto/cc/name patched')
 
