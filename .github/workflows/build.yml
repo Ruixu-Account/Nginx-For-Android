@@ -66,7 +66,6 @@ jobs:
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
-            # 恢复使用官方自带 sysroot 的 wrapper
             echo "CC=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang"
             echo "CXX=$TOOLCHAIN/bin/${{ matrix.triple }}${ANDROID_API}-clang++"
             echo "AR=$TOOLCHAIN/bin/llvm-ar"
@@ -126,12 +125,12 @@ jobs:
           python3 - <<'PY'
           import pathlib
           
-          # 补丁 1：让 auto/feature 执行测试时永远返回成功
+          # 补丁 1：让 auto/feature 执行测试时永远返回成功 (跳过运行)
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          s = s.replace('/bin/sh -c $NGX_AUTOTEST >> $NGX_AUTOCONF_ERR 2>&1', 'true')
+          s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
           p.write_text(s)
-          print('auto/feature patched')
+          print('auto/feature patched (skip execution)')
 
           # 补丁 2：改写 auto/types/sizeof，防止探测失败
           p = pathlib.Path('auto/types/sizeof')
@@ -144,7 +143,7 @@ jobs:
           p.write_text(s)
           print('auto/types/sizeof patched')
 
-          # 补丁 3：彻底阉割 auto/cc/name 的报错退出
+          # 补丁 3：干掉 auto/cc/name 的报错退出
           p = pathlib.Path('auto/cc/name')
           s = p.read_text()
           old_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
@@ -152,12 +151,13 @@ jobs:
           p.write_text(s)
           print('auto/cc/name patched')
 
-          # 补丁 4：终极绝杀！直接关掉 auto/cc/conf 对 --with-ld-opt 的验证逻辑
+          # 补丁 4：关掉 auto/cc/conf 对 --with-ld-opt 的验证逻辑，同时清空测试链接参数
           p = pathlib.Path('auto/cc/conf')
           s = p.read_text()
           s = s.replace('if test -n "$NGX_LD_OPT"; then', 'if false; then # patched: skip ld-opt check')
+          s = s.replace('NGX_TEST_LD_OPT="$NGX_LD_OPT"', 'NGX_TEST_LD_OPT=""')
           p.write_text(s)
-          print('auto/cc/conf patched (ld-opt check disabled)')
+          print('auto/cc/conf patched')
           PY
 
       - name: Configure nginx
@@ -165,7 +165,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 极度干净的参数
+          # 因为测试链接参数被清空了，这里可以放心传入完整的链接参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
