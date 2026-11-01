@@ -131,7 +131,6 @@ jobs:
           s = s.replace('#include <sys/types.h>', '#include <sys/types.h>\n#include <stdint.h>\n#include <inttypes.h>\n#include <stddef.h>')
           s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
           p.write_text(s)
-          print('auto/feature patched')
 
           # 补丁 2：修改 auto/types/sizeof，直接按类型输出字节数
           p = pathlib.Path('auto/types/sizeof')
@@ -140,33 +139,27 @@ jobs:
           new_block = 'ngx_size=8\nif [ "$ngx_type" = "int" ] || [ "$ngx_type" = "int32_t" ] || [ "$ngx_type" = "uint32_t" ] || [ "$ngx_type" = "sig_atomic_t" ]; then ngx_size=4; fi\nif [ "$ngx_type" = "short" ]; then ngx_size=2; fi\necho " $ngx_size bytes (forced)"'
           s = s.replace(old_block, new_block)
           p.write_text(s)
-          print('auto/types/sizeof patched')
 
-          # 补丁 3：彻底重写 auto/types/typedef（单行注入）
+          # 补丁 3：彻底重写 auto/types/typedef
           p = pathlib.Path('auto/types/typedef')
           s = 'echo $ngx_n "checking for $ngx_type ...$ngx_c"\nngx_found=yes\nif test -n "$ngx_feature_name"; then\n    have=$ngx_have_feature . auto/have\nfi\necho " found"\n'
           p.write_text(s)
-          print('auto/types/typedef rewritten')
 
-          # 补丁 4：彻底重写 auto/endianness（单行注入）
+          # 补丁 4：彻底重写 auto/endianness
           p = pathlib.Path('auto/endianness')
           s = 'echo $ngx_n "checking for system byte ordering ...$ngx_c"\necho " little endian"\nhave=NGX_HAVE_LITTLE_ENDIAN . auto/have\n'
           p.write_text(s)
-          print('auto/endianness rewritten')
 
-          # 补丁 5：彻底重写 auto/lib/pcre/conf（单行注入）
+          # 补丁 5：彻底重写 auto/lib/pcre/conf
           p = pathlib.Path('auto/lib/pcre/conf')
           s = 'if [ "$NGX_PLATFORM" != win32 ]; then\necho "checking for PCRE2 library ... found (cross-compile bypass)"\nhave=NGX_PCRE . auto/have\nhave=NGX_PCRE2 . auto/have\nCORE_INCS="$CORE_INCS $DEPS/include"\nLINK_DEPS="$LINK_DEPS $DEPS/lib/libpcre2-8.a"\nCORE_LIBS="$CORE_LIBS $DEPS/lib/libpcre2-8.a"\nPCRE=YES\nPCRE_LIBRARY=PCRE2\nfi\n'
           p.write_text(s)
-          print('auto/lib/pcre/conf rewritten')
 
           # 补丁 6：干掉 auto/cc/name 的报错退出
           p = pathlib.Path('auto/cc/name')
           s = p.read_text()
-          old_cc_error = "if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi"
-          s = s.replace(old_cc_error, "")
+          s = s.replace("if [ $ngx_found = no ]; then\n        echo\n        echo $0: error: C compiler $CC is not found\n        echo\n        exit 1\n    fi", "")
           p.write_text(s)
-          print('auto/cc/name patched')
 
           # 补丁 7：清空测试阶段链接参数
           p = pathlib.Path('auto/cc/conf')
@@ -174,7 +167,6 @@ jobs:
           s = s.replace('if test -n "$NGX_LD_OPT"; then', 'if false; then # patched: skip ld-opt check')
           s = s.replace('NGX_TEST_LD_OPT="$NGX_LD_OPT"', 'NGX_TEST_LD_OPT=""')
           p.write_text(s)
-          print('auto/cc/conf patched')
 
           # 补丁 8：给 ngx_files.c 强行注入 glob.h 头文件
           p = pathlib.Path('src/os/unix/ngx_files.c')
@@ -184,7 +176,6 @@ jobs:
               if '#include <glob.h>' not in s:
                   s = '#include <glob.h>\n' + s
               p.write_text(s)
-          print('ngx_files.c patched for glob.h')
 
           # 补丁 9：给 ngx_setaffinity.h 注入 sched.h
           p = pathlib.Path('src/os/unix/ngx_setaffinity.h')
@@ -192,25 +183,17 @@ jobs:
           if '#include <sched.h>' not in s:
               s = s.replace('#if (NGX_HAVE_SCHED_SETAFFINITY)', '#if (NGX_HAVE_SCHED_SETAFFINITY)\n#include <sched.h>')
               p.write_text(s)
-          print('ngx_setaffinity.h patched for sched.h')
 
-          # 补丁 10：强制修正 ngx_epoll_module.c 里的宏判断
+          # 补丁 10：解决 ngx_epoll_module.c 里的 EPOLLRDHUP 未定义/空宏问题
           p = pathlib.Path('src/event/modules/ngx_epoll_module.c')
           s = p.read_text()
+          s = s.replace('#if (NGX_READ_EVENT != EPOLLIN|EPOLLRDHUP)', '#if 1')
+          s = s.replace('#if (NGX_WRITE_EVENT != EPOLLOUT)', '#if 1')
           s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE && NGX_HAVE_EPOLLRDHUP)', '#if 1')
-          s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE)', '#if 1')
           s = s.replace('#if (NGX_HAVE_EPOLLRDHUP)', '#if 1')
+          s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE)', '#if 1')
           p.write_text(s)
           print('ngx_epoll_module.c patched')
-
-          # 补丁 11：修复 auto/have 写入空宏的问题
-          p = pathlib.Path('auto/have')
-          if p.exists():
-              s = p.read_text()
-              s = s.replace('#define $have  $value', '#define $have  1')
-              s = s.replace('#define $have $value', '#define $have 1')
-              p.write_text(s)
-          print('auto/have patched')
           PY
 
       - name: Configure nginx
@@ -218,7 +201,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 在 CFLAGS 里强行补全 epoll 相关的宏，防止它为空
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -228,7 +210,7 @@ jobs:
             --error-log-path=logs/error.log \
             --http-log-path=logs/access.log \
             --with-cc="$CC" \
-            --with-cc-opt="-O2 -fPIC -Wno-error=implicit-function-declaration -D_GNU_SOURCE -DNGX_HAVE_EPOLLEXCLUSIVE=1 -DNGX_HAVE_EPOLLRDHUP=1 -I$DEPS/include" \
+            --with-cc-opt="-O2 -fPIC -Wno-error=implicit-function-declaration -D_GNU_SOURCE -DEPOLLRDHUP=0x2000 -I$DEPS/include" \
             --with-ld-opt="-fPIE -pie -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lpthread -lm -ldl" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
@@ -252,6 +234,17 @@ jobs:
             --with-stream_ssl_module \
             --with-stream_realip_module \
             --with-stream_ssl_preread_module
+
+      - name: Force patch generated configs
+        run: |
+          set -euxo pipefail
+          cd "$SRC/nginx-${NGINX_VERSION}"
+
+          # 修复 ngx_auto_config.h 里的空宏
+          sed -i 's/#define NGX_HAVE_EPOLLEXCLUSIVE$/#define NGX_HAVE_EPOLLEXCLUSIVE 1/g' objs/ngx_auto_config.h || true
+          sed -i 's/#define NGX_HAVE_EPOLLRDHUP$/#define NGX_HAVE_EPOLLRDHUP 1/g' objs/ngx_auto_config.h || true
+          sed -i 's/#define NGX_HAVE_EVENTFD$/#define NGX_HAVE_EVENTFD 1/g' objs/ngx_auto_config.h || true
+          sed -i 's/#define NGX_HAVE_FILE_AIO$/#define NGX_HAVE_FILE_AIO 1/g' objs/ngx_auto_config.h || true
 
       - name: Build & install (with error extraction)
         run: |
