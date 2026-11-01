@@ -125,20 +125,19 @@ jobs:
           python3 - <<'PY'
           import pathlib
           
-          # 补丁 1：让 auto/feature 执行测试时永远返回成功 (跳过运行)
+          # 补丁 1：让 auto/feature 跳过运行阶段，但保留编译测试！
           p = pathlib.Path('auto/feature')
           s = p.read_text()
-          s = s.replace('case "$ngx_feature_run" in', 'case "skip" in')
+          # 把运行结果强制判定为 true，这意味着：只要编译通过，就认为是支持的
+          s = s.replace('/bin/sh -c $NGX_AUTOTEST >> $NGX_AUTOCONF_ERR 2>&1', 'true')
           p.write_text(s)
-          print('auto/feature patched (skip execution)')
+          print('auto/feature patched (compile true, run bypassed)')
 
-          # 补丁 2：改写 auto/types/sizeof，防止探测失败
+          # 补丁 2：改写 auto/types/sizeof
           p = pathlib.Path('auto/types/sizeof')
           s = p.read_text()
-          
           old_block = "if [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST`\n    echo \" $ngx_size bytes\"\nfi"
           new_block = "ngx_size=\"\"\nif [ -x $NGX_AUTOTEST ]; then\n    ngx_size=`$NGX_AUTOTEST 2>/dev/null || true`\nfi\nif [ -z \"$ngx_size\" ]; then\n    case \"$ngx_type\" in\n        short) ngx_size=2 ;;\n        int|int32_t|uint32_t|sig_atomic_t) ngx_size=4 ;;\n        *) ngx_size=8 ;;\n    esac\n    echo \" $ngx_size bytes (forced)\"\nelse\n    echo \" $ngx_size bytes\"\nfi"
-          
           s = s.replace(old_block, new_block)
           p.write_text(s)
           print('auto/types/sizeof patched')
@@ -151,13 +150,13 @@ jobs:
           p.write_text(s)
           print('auto/cc/name patched')
 
-          # 补丁 4：关掉 auto/cc/conf 对 --with-ld-opt 的验证逻辑，同时清空测试链接参数
+          # 补丁 4：清空测试阶段链接参数，但不破坏最终的 -lz 等参数
           p = pathlib.Path('auto/cc/conf')
           s = p.read_text()
           s = s.replace('if test -n "$NGX_LD_OPT"; then', 'if false; then # patched: skip ld-opt check')
           s = s.replace('NGX_TEST_LD_OPT="$NGX_LD_OPT"', 'NGX_TEST_LD_OPT=""')
           p.write_text(s)
-          print('auto/cc/conf patched')
+          print('auto/cc/conf patched (test link options cleared)')
           PY
 
       - name: Configure nginx
@@ -165,7 +164,6 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 因为测试链接参数被清空了，这里可以放心传入完整的链接参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
