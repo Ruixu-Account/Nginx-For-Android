@@ -61,27 +61,27 @@ chmod +x sbin/nginx
  *  · 原因：交叉编译无法在 x86 机器上运行 ARM 测试程序，Nginx 探测脚本判定编译器损坏。
  *  · 解法：Python 脚本强行替换 auto/feature 中的运行测试逻辑（改为 case "skip"）。
 2. can not define uint32_t / cannot detect system byte ordering
-   · 原因：Clang 18 严格模式下 sys/types.h 不默认包含 <stdint.h>；且无法运行 ARM 二进制检测大小端。
-   · 解法：重写 auto/types/typedef 和 auto/endianness，直接硬编码强制输出 little endian 和 4 bytes。
+*   · 原因：Clang 18 严格模式下 sys/types.h 不默认包含 <stdint.h>；且无法运行 ARM 二进制检测大小端。
+*   · 解法：重写 auto/types/typedef 和 auto/endianness，直接硬编码强制输出 little endian 和 4 bytes。
 3. unknown type name 'cpu_set_t'
-   · 原因：Bionic 将其藏在了 _GNU_SOURCE 宏后面。
-   · 解法：在 CFLAGS 中暴力注入 -D_GNU_SOURCE，并向 ngx_setaffinity.h 强行注入 <sched.h>。
+*   · 原因：Bionic 将其藏在了 _GNU_SOURCE 宏后面。
+*   · 解法：在 CFLAGS 中暴力注入 -D_GNU_SOURCE，并向 ngx_setaffinity.h 强行注入 <sched.h>。
 4. call to undeclared function 'glob'
-   · 原因：Nginx 的 ngx_files.c 忘了引入 <glob.h>，在老版本 GCC 下能过，Clang 18 直接报错。
-   · 解法：用 Python 强行在最前面注入 #include <glob.h>。
+*   · 原因：Nginx 的 ngx_files.c 忘了引入 <glob.h>，在老版本 GCC 下能过，Clang 18 直接报错。
+*   · 解法：用 Python 强行在最前面注入 #include <glob.h>。
 5. token is not a valid binary operator in a preprocessor subexpression
-   · 原因：Android 内核 UAPI 头文件将 EPOLLRDHUP 定义成了带类型转换的 (__poll_t) 0x2000，C 预处理器解析直接崩溃。
-   · 解法：用 sed 将 ngx_epoll_module.c 里的 #if 全部改成 #if 1，并强行注入 -DEPOLLRDHUP=0x2000。
+*   · 原因：Android 内核 UAPI 头文件将 EPOLLRDHUP 定义成了带类型转换的 (__poll_t) 0x2000，C 预处理器解析直接崩溃。
+*   · 解法：用 sed 将 ngx_epoll_module.c 里的 #if 全部改成 #if 1，并强行注入 -DEPOLLRDHUP=0x2000。
 6. unable to find library -lpthread
-   · 原因：Bionic 早就把 libpthread 和 libdl 合并进了 libc.so。Nginx 的 auto/unix 却非要塞 -lpthread。
-   · 解法：在 make 前，用 sed 把 objs/Makefile 里的 -lpthread 和 -ldl 全部物理扬了。
+*   · 原因：Bionic 早就把 libpthread 和 libdl 合并进了 libc.so。Nginx 的 auto/unix 却非要塞 -lpthread。
+*   · 解法：在 make 前，用 sed 把 objs/Makefile 里的 -lpthread 和 -ldl 全部物理扬了。
 
 🛠️ 构建环境
 
-· Host: ubuntu-latest
-· NDK: r27c (27.3.13750724)
-· Target API: 24 (Android 7.0)
-· 依赖库: OpenSSL 3.5.0, PCRE2 10.44
+*· Host: ubuntu-latest
+*· NDK: r27c (27.3.13750724)
+*· Target API: 24 (Android 7.0)
+*· 依赖库: OpenSSL 3.5.0, PCRE2 10.44
 
 📜 免责声明 (Disclaimer)
 
