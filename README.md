@@ -58,8 +58,8 @@ chmod +x sbin/nginx
 这绝不是一次轻松愉快的编译。如果你尝试用原版 Nginx 源码直接上 NDK 交叉编译，你会遇到以下所有报错，本项目已经在 YAML 中将其一一物理超度：
 
 1. C compiler is not found
-   · 原因：交叉编译无法在 x86 机器上运行 ARM 测试程序，Nginx 探测脚本判定编译器损坏。
-   · 解法：Python 脚本强行替换 auto/feature 中的运行测试逻辑（改为 case "skip"）。
+ *  · 原因：交叉编译无法在 x86 机器上运行 ARM 测试程序，Nginx 探测脚本判定编译器损坏。
+ *  · 解法：Python 脚本强行替换 auto/feature 中的运行测试逻辑（改为 case "skip"）。
 2. can not define uint32_t / cannot detect system byte ordering
    · 原因：Clang 18 严格模式下 sys/types.h 不默认包含 <stdint.h>；且无法运行 ARM 二进制检测大小端。
    · 解法：重写 auto/types/typedef 和 auto/endianness，直接硬编码强制输出 little endian 和 4 bytes。
