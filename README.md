@@ -15,6 +15,7 @@
 *   **HTTP/3 支持**：内嵌 OpenSSL 3.5.0，开启 QUIC 和 HTTP/3 模块，完美对接 Cloudflare CDN。
 *   **全功能网关**：包含 Stream 四层代理、反向代理、Rewrite 等常用模块，可作为本地微服务网关。
 *   **极致轻量**：由于启用了 Actions 缓存（NDK & PCRE2），单架构编译仅需 **1分半钟**。
+*   **PQC支持**：由于使用了最新的 OpenSSL 3.5.0，所以支持 **X25519MLKEM768**。
 
 ## 📦 产物 (Artifacts)
 
