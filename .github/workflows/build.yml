@@ -205,7 +205,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 加上了 -Wl,-z,max-page-size=16384 解决 TLS 对齐问题
+          # 注意：删掉了 tls-align，因为 LLD 不认这个参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -216,7 +216,7 @@ jobs:
             --http-log-path=logs/access.log \
             --with-cc="$CC" \
             --with-cc-opt="-O2 -fPIC -Wno-error=implicit-function-declaration -D_GNU_SOURCE -DEPOLLRDHUP=0x2000 -I$DEPS/include" \
-            --with-ld-opt="-fPIE -pie -Wl,-z,max-page-size=16384 -Wl,-z,tls-align=16384 -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lm" \
+            --with-ld-opt="-fPIE -pie -Wl,-z,max-page-size=16384 -L$DEPS/lib -L$SYSROOT/usr/lib/${{ matrix.triple }} -L$SYSROOT/usr/lib/${{ matrix.triple }}/${ANDROID_API} -lpcre2-8 -lz -latomic -lm" \
             --with-openssl="$SRC/openssl-${OPENSSL_VERSION}" \
             --with-openssl-opt="no-shared no-tests no-engine no-dso -D__ANDROID_API__=${ANDROID_API} -fPIC ${{ matrix.openssl_target }}" \
             --with-threads \
@@ -274,6 +274,68 @@ jobs:
           
           set -e
           make install DESTDIR="$RUNNER_TEMP/stage"
+
+      - name: Post-process: Patch TLS alignment for Bionic
+        run: |
+          set -euxo pipefail
+          BIN="$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
+          
+          # 1. 物理超度 ELF 头部，强制修改为 64 字节对齐
+          python3 - <<'PY'
+          import struct
+          import sys
+          import os
+          
+          filename = os.environ.get("BIN_PATH")
+          print(f"Patching ELF TLS alignment to 64 for Bionic: {filename}")
+          
+          with open(filename, 'r+b') as f:
+              f.seek(0)
+              e_ident = f.read(16)
+              if e_ident[0:4] != b'\x7fELF':
+                  sys.exit("Not an ELF file!")
+              if e_ident[4] != 2:
+                  sys.exit("Not a 64-bit ELF file!")
+              
+              f.seek(0x20)
+              e_phoff = struct.unpack('<Q', f.read(8))[0]
+              f.seek(0x36)
+              e_phentsize = struct.unpack('<H', f.read(2))[0]
+              f.seek(0x38)
+              e_phnum = struct.unpack('<H', f.read(2))[0]
+              
+              patched = False
+              for i in range(e_phnum):
+                  ph_offset = e_phoff + i * e_phentsize
+                  f.seek(ph_offset)
+                  p_type = struct.unpack('<I', f.read(4))[0]
+                  
+                  if p_type == 7: # PT_TLS
+                      align_offset = ph_offset + 0x30
+                      f.seek(align_offset)
+                      current_align = struct.unpack('<Q', f.read(8))[0]
+                      
+                      if current_align < 64:
+                          f.seek(align_offset)
+                          f.write(struct.pack('<Q', 64))
+                          print(f"✅ Successfully patched PT_TLS alignment from {current_align} to 64!")
+                      else:
+                          print(f"PT_TLS alignment is already {current_align} (>= 64).")
+                      patched = True
+                      break
+                      
+              if not patched:
+                  sys.exit("❌ PT_TLS segment not found!")
+          PY
+          export BIN_PATH="$BIN"
+          
+          # 2. 验证是否被改成功了
+          echo "=== Verification ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS
+          
+          # 3. 最后再 strip 一下
+          "$STRIP" --strip-unneeded "$BIN"
+          file "$BIN"
 
       - name: Create basic directories
         run: |
