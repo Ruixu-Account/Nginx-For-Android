@@ -275,37 +275,6 @@ jobs:
           set -e
           make install DESTDIR="$RUNNER_TEMP/stage"
 
-      - name: Fix TLS Alignment with termux-elf-cleaner
-        run: |
-          set -euxo pipefail
-          
-          # 1. 尝试直接下载 v3.0.1 的预编译资产
-          if wget -q https://github.com/termux/termux-elf-cleaner/releases/download/v3.0.1/termux-elf-cleaner -O "$RUNNER_TEMP/termux-elf-cleaner"; then
-            echo "成功下载预编译版本"
-            chmod +x "$RUNNER_TEMP/termux-elf-cleaner"
-          else
-            echo "预编译下载失败，切换到源码编译..."
-            # 2. 如果下载失败，直接从源码拉取并编译
-            git clone --depth 1 --branch v3.0.1 https://github.com/termux/termux-elf-cleaner.git /tmp/termux-elf-cleaner-src
-            cd /tmp/termux-elf-cleaner-src
-            cmake -B build -DCMAKE_BUILD_TYPE=Release
-            cmake --build build --parallel "$(nproc)"
-            
-            # 复制编译好的二进制文件
-            cp build/termux-elf-cleaner "$RUNNER_TEMP/termux-elf-cleaner"
-            chmod +x "$RUNNER_TEMP/termux-elf-cleaner"
-          fi
-
-          # 3. 执行修复命令
-          cd "$RUNNER_TEMP"
-          ./termux-elf-cleaner --api-level 24 "$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
-          
-          # 4. 继续后续的 strip 和文件信息查看
-          BIN="$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
-          "$STRIP" --strip-unneeded "$BIN"
-          file "$BIN"
-          "$TOOLCHAIN/bin/llvm-readelf -d" "$BIN" | head -30
-
       - name: Create basic directories
         run: |
           set -euxo pipefail
