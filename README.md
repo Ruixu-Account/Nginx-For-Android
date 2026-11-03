@@ -76,7 +76,9 @@ chmod +x sbin/nginx
 6. unable to find library -lpthread
 *   原因：Bionic 早就把 libpthread 和 libdl 合并进了 libc.so。Nginx 的 auto/unix 却非要塞 -lpthread。
 *   解法：在 make 前，用 sed 把 objs/Makefile 里的 -lpthread 和 -ldl 全部物理扬了。
-
+7. Segmentation fault 与 TLS segment underaligned 的双重夹击
+*   原因：Android 16 的 Bionic Linker 强制要求 TLS 段 64 字节对齐，但 NDK r27c 的 LLD 链接器根本不支持 tls-align 参数。
+*   解法：在 CI 里用 Python 脚本读取 ELF 的 e_phoff，暴力定位 PT_TLS 段，强制把 p_align 改成 64。Fuck Bionic Linker.
 🛠️ 构建环境
 
 * Host: ubuntu-latest
