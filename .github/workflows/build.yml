@@ -8,7 +8,6 @@ on:
         required: true
         default: "1.30.6"
 
-# 必须赋予写入权限，才能创建 Release 和 Tag
 permissions:
   contents: write
 
@@ -126,7 +125,7 @@ jobs:
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
           
-          python3 - <<'PY'
+          cat > /tmp/patch_nginx.py << 'PYEOF'
           import pathlib
           
           # 补丁 1：跳过 auto/feature 的运行测试，并强行加头文件
@@ -197,15 +196,15 @@ jobs:
           s = s.replace('#if (NGX_HAVE_EPOLLRDHUP)', '#if 1')
           s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE)', '#if 1')
           p.write_text(s)
-          print('ngx_epoll_module.c patched')
-          PY
+          PYEOF
+          
+          python3 /tmp/patch_nginx.py
 
       - name: Configure nginx
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
 
-          # 注意：删掉了 tls-align，因为 LLD 不认这个参数
           ./configure \
             --prefix="$NGINX_PREFIX" \
             --sbin-path=sbin/nginx \
@@ -275,20 +274,21 @@ jobs:
           set -e
           make install DESTDIR="$RUNNER_TEMP/stage"
 
-      - name: Post-process: Patch TLS alignment for Bionic
+      # 注意：去掉了 name 里的多余冒号
+      - name: Post-process TLS Align
         run: |
           set -euxo pipefail
           BIN="$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
+          export BIN_PATH="$BIN"
           
-          # 1. 物理超度 ELF 头部，强制修改为 64 字节对齐
-          python3 - <<'PY'
+          cat > /tmp/fix_tls.py << 'PYEOF'
           import struct
           import sys
           import os
-          
+
           filename = os.environ.get("BIN_PATH")
           print(f"Patching ELF TLS alignment to 64 for Bionic: {filename}")
-          
+
           with open(filename, 'r+b') as f:
               f.seek(0)
               e_ident = f.read(16)
@@ -296,25 +296,25 @@ jobs:
                   sys.exit("Not an ELF file!")
               if e_ident[4] != 2:
                   sys.exit("Not a 64-bit ELF file!")
-              
+
               f.seek(0x20)
               e_phoff = struct.unpack('<Q', f.read(8))[0]
               f.seek(0x36)
               e_phentsize = struct.unpack('<H', f.read(2))[0]
               f.seek(0x38)
               e_phnum = struct.unpack('<H', f.read(2))[0]
-              
+
               patched = False
               for i in range(e_phnum):
                   ph_offset = e_phoff + i * e_phentsize
                   f.seek(ph_offset)
                   p_type = struct.unpack('<I', f.read(4))[0]
-                  
-                  if p_type == 7: # PT_TLS
+
+                  if p_type == 7:
                       align_offset = ph_offset + 0x30
                       f.seek(align_offset)
                       current_align = struct.unpack('<Q', f.read(8))[0]
-                      
+
                       if current_align < 64:
                           f.seek(align_offset)
                           f.write(struct.pack('<Q', 64))
@@ -323,17 +323,16 @@ jobs:
                           print(f"PT_TLS alignment is already {current_align} (>= 64).")
                       patched = True
                       break
-                      
+
               if not patched:
                   sys.exit("❌ PT_TLS segment not found!")
-          PY
-          export BIN_PATH="$BIN"
+          PYEOF
           
-          # 2. 验证是否被改成功了
+          python3 /tmp/fix_tls.py
+          
           echo "=== Verification ==="
           "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS
           
-          # 3. 最后再 strip 一下
           "$STRIP" --strip-unneeded "$BIN"
           file "$BIN"
 
@@ -373,7 +372,6 @@ jobs:
           path: ${{ runner.temp }}/nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}.tar.gz
           if-no-files-found: ignore
 
-      # ====== 发布到 GitHub Releases ======
       - name: Release to GitHub
         uses: softprops/action-gh-release@v2
         with:
