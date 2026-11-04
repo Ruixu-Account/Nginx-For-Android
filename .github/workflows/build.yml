@@ -56,16 +56,16 @@ jobs:
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;${NDK_VERSION}" || true
-          
+
       - name: Export toolchain env
         run: |
           set -euxo pipefail
           echo "NDK_ROOT=$ANDROID_HOME/ndk/${NDK_VERSION}" >> $GITHUB_ENV
           echo "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
-          
+
           TOOLCHAIN="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
-          
+
           {
             echo "TOOLCHAIN=$TOOLCHAIN"
             echo "SYSROOT=$SYSROOT"
@@ -124,10 +124,10 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
-          
+
           cat > /tmp/patch_nginx.py << 'PYEOF'
           import pathlib
-          
+
           # 补丁 1：跳过 auto/feature 的运行测试，并强行加头文件
           p = pathlib.Path('auto/feature')
           s = p.read_text()
@@ -196,8 +196,17 @@ jobs:
           s = s.replace('#if (NGX_HAVE_EPOLLRDHUP)', '#if 1')
           s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE)', '#if 1')
           p.write_text(s)
+
+          # 补丁 11：插钉子，强制 TLS 64 字节对齐（解决 Bionic 报错）
+          # 注意：这里全部用单行字符串拼接，防止 YAML 缩进被多行字符串搞炸
+          p = pathlib.Path('src/core/nginx.c')
+          s = p.read_text()
+          if 'ngx_tls_force_aligner' not in s:
+              tls_pin = '\n// Force TLS alignment for Android Bionic Linker\n__thread __attribute__((aligned(64), used, retain)) volatile char ngx_tls_force_aligner[64];\n'
+              s = s.replace('#include <ngx_config.h>', '#include <ngx_config.h>' + tls_pin)
+              p.write_text(s)
           PYEOF
-          
+
           python3 /tmp/patch_nginx.py
 
       - name: Configure nginx
@@ -256,12 +265,12 @@ jobs:
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
-          
+
           set +e
           make -j"$(nproc)" 2>&1 | tee /tmp/make.log
           MAKE_EXIT=${PIPESTATUS[0]}
           set -e
-          
+
           if [ $MAKE_EXIT -ne 0 ]; then
             echo "=================================================="
             echo "=== MAKE FAILED! FILTERING RELEVANT ERRORS ==="
@@ -270,78 +279,23 @@ jobs:
             echo "=================================================="
             exit 1
           fi
-          
+
           set -e
           make install DESTDIR="$RUNNER_TEMP/stage"
 
-      # 注意：去掉了 name 里的多余冒号
-      - name: Post-process TLS Align
-        run: |
-          set -euxo pipefail
           BIN="$RUNNER_TEMP/stage/${NGINX_PREFIX}/sbin/nginx"
-          export BIN_PATH="$BIN"
-          
-          cat > /tmp/fix_tls.py << 'PYEOF'
-          import struct
-          import sys
-          import os
-
-          filename = os.environ.get("BIN_PATH")
-          print(f"Patching ELF TLS alignment to 64 for Bionic: {filename}")
-
-          with open(filename, 'r+b') as f:
-              f.seek(0)
-              e_ident = f.read(16)
-              if e_ident[0:4] != b'\x7fELF':
-                  sys.exit("Not an ELF file!")
-              if e_ident[4] != 2:
-                  sys.exit("Not a 64-bit ELF file!")
-
-              f.seek(0x20)
-              e_phoff = struct.unpack('<Q', f.read(8))[0]
-              f.seek(0x36)
-              e_phentsize = struct.unpack('<H', f.read(2))[0]
-              f.seek(0x38)
-              e_phnum = struct.unpack('<H', f.read(2))[0]
-
-              patched = False
-              for i in range(e_phnum):
-                  ph_offset = e_phoff + i * e_phentsize
-                  f.seek(ph_offset)
-                  p_type = struct.unpack('<I', f.read(4))[0]
-
-                  if p_type == 7:
-                      align_offset = ph_offset + 0x30
-                      f.seek(align_offset)
-                      current_align = struct.unpack('<Q', f.read(8))[0]
-
-                      if current_align < 64:
-                          f.seek(align_offset)
-                          f.write(struct.pack('<Q', 64))
-                          print(f"✅ Successfully patched PT_TLS alignment from {current_align} to 64!")
-                      else:
-                          print(f"PT_TLS alignment is already {current_align} (>= 64).")
-                      patched = True
-                      break
-
-              if not patched:
-                  sys.exit("❌ PT_TLS segment not found!")
-          PYEOF
-          
-          python3 /tmp/fix_tls.py
-          
-          echo "=== Verification ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS
-          
           "$STRIP" --strip-unneeded "$BIN"
           file "$BIN"
+
+          echo "=== Verification ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS
 
       - name: Create basic directories
         run: |
           set -euxo pipefail
           cd "$RUNNER_TEMP/stage/${NGINX_PREFIX}"
           mkdir -p run logs html conf
-          
+
           cat > conf/nginx.conf <<'EOF'
           worker_processes auto;
           error_log logs/error.log warn;
@@ -379,12 +333,12 @@ jobs:
           name: Nginx ${{ env.NGINX_VERSION }} (Android ${{ matrix.abi }})
           body: |
             Auto-built Nginx ${{ env.NGINX_VERSION }} for Android (${{ matrix.abi }}).
-            
+
             Built with:
             - NDK r27c (API 24)
             - OpenSSL 3.5.0
             - PCRE2 10.44
-            
+
             Fully static linked, ready for Termux or Android App sandbox.
           files: ${{ runner.temp }}/nginx-${{ env.NGINX_VERSION }}-${{ matrix.abi }}.tar.gz
           draft: false
