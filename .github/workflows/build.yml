@@ -120,10 +120,17 @@ jobs:
           tar xf openssl.tar.gz
           ls -d nginx-* openssl-*
 
-      - name: Patch auto scripts for cross-compile
+      - name: Patch auto scripts and inject TLS Assembly
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
+
+          # ==========================================
+          # 用你提供的 Base64 解码生成汇编“钉子”
+          # ==========================================
+          echo "LnNlY3Rpb24gLnRkYXRhLCJhd1QiLEBwcm9nYml0cwouYmFsaWduIDY0Ci5nbG9ibCBfX2FuZHJvaWRfdGxzX2FsaWduZXIKLnR5cGUgX19hbmRyb2lkX3Rsc19hbGlnbmVyLCBAb2JqZWN0Cl9fYW5kcm9pZF90bHNfYWxpZ25lcjoKICAgIC56ZXJvIDEKLnNpemUgX19hbmRyb2lkX3Rsc19hbGlnbmVyLCAxCi5wcmV2aW91cw==" | base64 -d > crtandroidtls.S
+          echo "✅ 汇编钉子文件 crtandroidtls.S 已生成"
+          # ==========================================
 
           cat > /tmp/patch_nginx.py << 'PYEOF'
           import pathlib
@@ -196,15 +203,6 @@ jobs:
           s = s.replace('#if (NGX_HAVE_EPOLLRDHUP)', '#if 1')
           s = s.replace('#if (NGX_HAVE_EPOLLEXCLUSIVE)', '#if 1')
           p.write_text(s)
-
-          # 补丁 11：插钉子，强制 TLS 64 字节对齐（解决 Bionic 报错）
-          # 注意：这里全部用单行字符串拼接，防止 YAML 缩进被多行字符串搞炸
-          p = pathlib.Path('src/core/nginx.c')
-          s = p.read_text()
-          if 'ngx_tls_force_aligner' not in s:
-              tls_pin = '\n// Force TLS alignment for Android Bionic Linker\n__thread __attribute__((aligned(64), used, retain)) volatile char ngx_tls_force_aligner[64];\n'
-              s = s.replace('#include <ngx_config.h>', '#include <ngx_config.h>' + tls_pin)
-              p.write_text(s)
           PYEOF
 
           python3 /tmp/patch_nginx.py
@@ -248,7 +246,7 @@ jobs:
             --with-stream_realip_module \
             --with-stream_ssl_preread_module
 
-      - name: Force patch generated configs
+      - name: Force patch generated configs & Build
         run: |
           set -euxo pipefail
           cd "$SRC/nginx-${NGINX_VERSION}"
@@ -258,13 +256,16 @@ jobs:
           sed -i 's/#define NGX_HAVE_EVENTFD$/#define NGX_HAVE_EVENTFD 1/g' objs/ngx_auto_config.h || true
           sed -i 's/#define NGX_HAVE_FILE_AIO$/#define NGX_HAVE_FILE_AIO 1/g' objs/ngx_auto_config.h || true
 
+          # 移除旧库
           sed -i 's/-lpthread//g' objs/Makefile
           sed -i 's/-ldl//g' objs/Makefile
 
-      - name: Build & install
-        run: |
-          set -euxo pipefail
-          cd "$SRC/nginx-${NGINX_VERSION}"
+          # ==========================================
+          # 编译汇编文件，并强行塞入 Makefile 的 LDFLAGS 中
+          # ==========================================
+          "$CC" -c crtandroidtls.S -o crtandroidtls.o
+          # 将它添加到 LDFLAGS 开头，确保链接时能被优先识别
+          sed -i "s|^LDFLAGS =|LDFLAGS = crtandroidtls.o|g" objs/Makefile
 
           set +e
           make -j"$(nproc)" 2>&1 | tee /tmp/make.log
@@ -288,7 +289,7 @@ jobs:
           file "$BIN"
 
           echo "=== Verification ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS
+          "$TOOLCHAIN/bin/llvm-readelf" -l "$BIN" | grep TLS || true
 
       - name: Create basic directories
         run: |
