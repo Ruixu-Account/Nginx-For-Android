@@ -7,6 +7,10 @@ on:
         description: "nginx version (e.g. 1.30.6)"
         required: true
         default: "1.30.6"
+      openssl_version:
+        description: "OpenSSL version (e.g. 3.5.9)"
+        required: true
+        default: "3.5.9"
 
 permissions:
   contents: write
@@ -15,7 +19,7 @@ env:
   NDK_VERSION: "27.3.13750724"
   ANDROID_API: "24"
   PCRE2_VERSION: "10.44"
-  OPENSSL_VERSION: "3.5.0"
+  OPENSSL_VERSION: ${{ inputs.openssl_version || '3.5.9' }}
   NGINX_PREFIX: "/data/data/com.nginx.app/nginx"
 
 jobs:
@@ -342,7 +346,7 @@ jobs:
 
             Built with:
             - NDK r27c (API 24)
-            - OpenSSL 3.5.0
+            - OpenSSL ${{ env.OPENSSL_VERSION }}
             - PCRE2 10.44
 
             Fully static linked, ready for Termux or Android App sandbox.
