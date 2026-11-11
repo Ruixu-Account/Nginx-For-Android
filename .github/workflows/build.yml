@@ -261,10 +261,9 @@ jobs:
           sed -i 's/-ldl//g' objs/Makefile
 
           # ==========================================
-          # 编译汇编文件，并强行塞入 Makefile 的 LDFLAGS 中
+          # 方案一：直接编译到 objs/ 目录中
           # ==========================================
-          "$CC" -c crtandroidtls.S -o crtandroidtls.o
-          # 将它添加到 LDFLAGS 开头，确保链接时能被优先识别
+          "$CC" -c crtandroidtls.S -o objs/crtandroidtls.o
           sed -i "s|^LDFLAGS =|LDFLAGS = crtandroidtls.o|g" objs/Makefile
 
           set +e
