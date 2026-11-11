@@ -261,10 +261,16 @@ jobs:
           sed -i 's/-ldl//g' objs/Makefile
 
           # ==========================================
-          # 方案一：直接编译到 objs/ 目录中
+          # 终极暴力法：直接把 .o 塞进链接命令里
           # ==========================================
+          # 1. 编译汇编文件，扔进 objs 目录
           "$CC" -c crtandroidtls.S -o objs/crtandroidtls.o
-          sed -i "s|^LDFLAGS =|LDFLAGS = crtandroidtls.o|g" objs/Makefile
+          
+          # 2. 搜索 Makefile 中生成 nginx 的命令行，匹配 "-o objs/nginx" 并追加 .o
+          sed -i 's|-o objs/nginx|-o objs/nginx objs/crtandroidtls.o|g' objs/Makefile
+          
+          # 验证一下是否真的替换进去了（方便你在日志里看）
+          grep -n "o objs/nginx" objs/Makefile || true
 
           set +e
           make -j"$(nproc)" 2>&1 | tee /tmp/make.log
